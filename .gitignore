@@ -8,4 +8,5 @@ venv/
 .idea/
 .vscode/
 *.sqlite
+.codegraph/
 .DS_Store

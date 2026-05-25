@@ -1,6 +1,36 @@
 from datetime import date
 from typing import List, Optional
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, EmailStr
+
+
+class UserRegister(BaseModel):
+    """用户注册请求"""
+    username: str = Field(..., min_length=3, max_length=128, description="用户名")
+    email: Optional[str] = Field(None, description="邮箱地址")
+    password: str = Field(..., min_length=6, description="密码（至少6位）")
+
+
+class UserLogin(BaseModel):
+    """用户登录请求"""
+    username: str = Field(..., description="用户名")
+    password: str = Field(..., description="密码")
+
+
+class Token(BaseModel):
+    """Token 响应"""
+    access_token: str = Field(..., description="访问令牌")
+    token_type: str = Field(default="bearer", description="令牌类型")
+
+
+class UserResponse(BaseModel):
+    """用户信息响应"""
+    id: int
+    username: str
+    email: Optional[str] = None
+    is_active: bool
+
+    class Config:
+        from_attributes = True
 
 
 class ChatRequest(BaseModel):
