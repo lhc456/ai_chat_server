@@ -6,6 +6,7 @@ from app.api.checklist import router as checklist_router
 from app.api.workday import router as workday_router
 from app.api.documents import router as documents_router
 from app.api.news import router as news_router
+from app.api.voice import router as voice_router
 
 app = FastAPI(
     title="AI对话小助手后端",
@@ -25,6 +26,16 @@ app.include_router(workday_router, prefix="/api/workday", tags=["workday"])
 app.include_router(
     documents_router, prefix="/api/documents", tags=["documents"])
 app.include_router(news_router, prefix="/api/news", tags=["news"])
+
+# 语音对话（音箱式交互）
+app.include_router(voice_router, prefix="/api/voice", tags=["voice"])
+
+
+@app.on_event("startup")
+async def preload_asr_model():
+    """启动时预加载 ASR 模型，避免第一个请求等太久"""
+    from app.clients import asr_client
+    asr_client._get_model()
 
 
 @app.get("/", summary="服务健康检查")

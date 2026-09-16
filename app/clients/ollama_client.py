@@ -5,8 +5,8 @@ from app.core.config import settings
 class OllamaClient:
     """Ollama 本地大模型客户端"""
 
-    # Ollama API 默认地址
-    BASE_URL = "http://localhost:11434"
+    # Ollama API 地址（从配置读取，便于修改端口或部署到其他机器）
+    BASE_URL = settings.ollama_base_url
 
     @classmethod
     async def create_chat_reply(
@@ -27,7 +27,7 @@ class OllamaClient:
             AI 生成的回复文本
         """
         if model is None:
-            model = settings.ollama_model
+            model = settings.ollama_model  # 默认从配置读取
 
         url = f"{cls.BASE_URL}/api/chat"
 
