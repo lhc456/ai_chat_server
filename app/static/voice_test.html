@@ -78,10 +78,12 @@
   <h2>1️⃣ 文字转语音（TTS）</h2>
   <textarea id="ttsText" placeholder="输入要转成语音的文字，例如：你好，我是你的语音助手">你好，我是你的语音助手，欢迎使用语音对话功能</textarea>
   <div class="row">
-    <button id="ttsBtn" onclick="doTTS()">🔊 合成并播放</button>
+    <button id="ttsBtn" onclick="doTTS()">🔊 整段合成播放（旧）</button>
+    <button id="ttsStreamBtn" onclick="doTTSStream()">⚡ 流式播放（新）</button>
     <span id="ttsStatus" class="status"></span>
   </div>
   <audio id="ttsAudio" controls></audio>
+  <div class="hint">两个按钮用同一段文字，可以对比出声速度：整段模式等全部合成完才返回；流式模式拿到第一块音频立刻开始播。</div>
 </div>
 
 <!-- ASR -->
@@ -104,7 +106,7 @@
 <script>
 const API = '';  // 同源，无需前缀
 
-/* ---------- TTS ---------- */
+/* ---------- TTS：整段合成 ---------- */
 async function doTTS() {
   const text = document.getElementById('ttsText').value.trim();
   const btn = document.getElementById('ttsBtn');
@@ -126,7 +128,36 @@ async function doTTS() {
     const blob = await resp.blob();
     audio.src = URL.createObjectURL(blob);
     audio.play();
-    setStatus(status, 'ok', '✅ 合成成功，耗时 ' + (resp.headers.get('X-Elapsed-Ms') || '?') + 'ms，正在播放');
+    setStatus(status, 'ok', '✅ 整段合成：等完全部才出声，总耗时 ' + (resp.headers.get('X-Elapsed-Ms') || '?') + 'ms');
+  } catch (e) {
+    setStatus(status, 'err', '❌ ' + e.message);
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+/* ---------- TTS：流式播放 ---------- */
+let ttsStreamStart = 0;
+
+async function doTTSStream() {
+  const text = document.getElementById('ttsText').value.trim();
+  const btn = document.getElementById('ttsStreamBtn');
+  const status = document.getElementById('ttsStatus');
+  const audio = document.getElementById('ttsAudio');
+  if (!text) { setStatus(status, 'err', '请输入文字'); return; }
+
+  setStatus(status, '', '流式合成中…');
+  btn.disabled = true;
+  try {
+    // 直接把 <audio> 指向流式接口，浏览器收到 mp3 块就渐进播放
+    audio.src = API + '/api/voice/synthesize/stream?text=' + encodeURIComponent(text);
+    ttsStreamStart = performance.now();
+    await audio.play();   // play() 在真正开始出声后才 resolve，正好用来量首音延迟
+    // 出声后再等服务端推完，把 TTFB 展示出来
+    const ttfb = await fetch(API + '/api/voice/synthesize/stream?text=' + encodeURIComponent(text), { method: 'HEAD' })
+      .then(r => r.headers.get('X-TTFB-Ms')).catch(() => null);
+    setStatus(status, 'ok', '✅ 流式播放：出声等待 ' + Math.round(performance.now() - ttsStreamStart) + 'ms'
+      + (ttfb ? '（服务端首块 ' + ttfb + 'ms）' : ''));
   } catch (e) {
     setStatus(status, 'err', '❌ ' + e.message);
   } finally {

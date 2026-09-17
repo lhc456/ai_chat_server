@@ -14,6 +14,7 @@
 |------|------|------|
 | 🎙️ 语音识别（ASR） | 本地 faster-whisper 模型，上传录音返回文字 | `POST /api/voice/transcribe` |
 | 🔊 语音合成（TTS） | edge-tts 中文发音人，文字合成 mp3 音频 | `POST /api/voice/synthesize` |
+| ⚡ 流式语音合成 | 边合成边返回，首音延迟实测 ~1.3s（整段模式 ~1.7~2.4s）；剩余 1.3s 为 edge-tts 云端握手下限，后续可用本地引擎进一步压低 | `GET /api/voice/synthesize/stream` |
 | 🤖 完整语音对话 | 录音 → 识别 → AI 回复 → 合成语音返回 | `POST /api/voice/interaction` 🔒 |
 | ❤️ 健康检查 | 服务状态确认 | `GET /` |
 
@@ -134,6 +135,13 @@ curl http://localhost:8000/
 curl -X POST http://localhost:8000/api/voice/synthesize \
   -F "text=今天天气真不错" \
   -o tts.mp3
+```
+
+**流式语音合成**（边合成边返回，响应头 X-TTFB-Ms 是首音延迟）：
+
+```bash
+curl "http://localhost:8000/api/voice/synthesize/stream?text=今天天气真不错" \
+  -o tts_stream.mp3 -D -
 ```
 
 **语音识别**（上传录音返回文字）：

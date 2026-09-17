@@ -1,8 +1,10 @@
 import json
+import time
 
-from fastapi import APIRouter, File, Form, HTTPException, UploadFile
-from fastapi.responses import Response
+from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile
+from fastapi.responses import Response, StreamingResponse
 
+from app.clients import tts_client
 from app.core.config import settings
 from app.services.voice_chat_service import VoiceChatService
 
@@ -31,6 +33,47 @@ async def synthesize(text: str = Form(..., description="要合成的文字", min
         headers={
             "X-Elapsed-Ms": str(result.elapsed_ms),
             "Content-Disposition": 'inline; filename="tts.mp3"',
+        },
+    )
+
+
+@router.get(
+    "/synthesize/stream",
+    summary="文字转语音（流式，边合成边返回）",
+    description=(
+        "把一段文字合成 mp3 语音，边合成边推送音频块。\n\n"
+        "客户端拿到第一个音频块即可开始播放，首音延迟显著低于整段合成接口。\n"
+        "响应头 X-TTFB-Ms 为首块音频的等待耗时（首音延迟）。"
+    ),
+)
+async def synthesize_stream(text: str = Query(..., description="要合成的文字", min_length=1, max_length=1000)):
+    start = time.time()
+
+    # 先等第一块音频再返回响应：这一步的耗时就是首音延迟（TTFB），
+    # 拿到后记进响应头；后续音频块由 StreamingResponse 边合成边推。
+    try:
+        gen = tts_client.stream_synthesize(text)
+        first_chunk = await gen.__anext__()
+    except StopAsyncIteration:
+        raise HTTPException(status_code=503, detail="语音合成服务未返回音频")
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=f"语音合成服务暂时不可用: {e}")
+
+    ttfb_ms = int((time.time() - start) * 1000)
+
+    async def audio_stream():
+        yield first_chunk
+        async for chunk in gen:
+            yield chunk
+
+    return StreamingResponse(
+        audio_stream(),
+        media_type="audio/mpeg",
+        headers={
+            "X-TTFB-Ms": str(ttfb_ms),
+            "Content-Disposition": 'inline; filename="tts_stream.mp3"',
         },
     )
 
