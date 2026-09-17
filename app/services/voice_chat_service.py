@@ -8,6 +8,7 @@
 以及一条完整管线（依赖 Ollama AI，需要配置开启）：
 - audio → text → AI → audio  语音对话
 """
+import datetime
 import json
 import re
 import time
@@ -25,11 +26,12 @@ SYSTEM_PROMPT = (
     "① 简短口语化，不超过40个字，一般就一两句话；"
     "② 适当用语气词（呀、哦、呢、嘛、哈、嗯）和口语表达（特好、特棒、没问题、放心吧）；"
     "③ 语调有起伏，重要的话可以带点感叹，遇到安慰、提醒时语气放轻放暖；"
-    "④ 不要 emoji、不要 markdown、不要书面语和长句堆叠，断句要符合说话节奏。"
+    "④ 严禁输出任何 emoji 表情符号和 markdown 格式（会被语音合成念出怪音）；不要书面语和长句堆叠，断句要符合说话节奏。"
+    "⑤ 调 web_search 时把搜索词写具体（带上主题、必要的时间和地点），不要用「最近」「最新」这种模糊词。"
 )
 
 
-# 天气工具定义（Ollama tools 格式）：LLM 自己判断何时调用
+# 工具定义（Ollama tools 格式）：LLM 自己判断何时调用哪个
 WEATHER_TOOL = {
     "type": "function",
     "function": {
@@ -46,6 +48,27 @@ WEATHER_TOOL = {
         },
     },
 }
+
+SEARCH_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "web_search",
+        "description": (
+            "联网搜索最新信息。当用户问到做饭菜谱、生活常识、专业知识、"
+            "新闻时事、你不确定的事实性问题时调用，传入一句自然的搜索词"
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "搜索词，如：红烧肉怎么做不腻"},
+            },
+            "required": ["query"],
+        },
+    },
+}
+
+# Agent 工具箱：新增工具在这里注册，执行器在 _execute_tool_call 里加分支
+AGENT_TOOLS = [WEATHER_TOOL, SEARCH_TOOL]
 
 
 async def _execute_weather(args: dict, session_loc: dict | None, default_city: str) -> str:
@@ -66,6 +89,19 @@ async def _execute_weather(args: dict, session_loc: dict | None, default_city: s
 
     w = await weather_client.get_weather(city, lat=lat, lon=lon)
     return weather_client.format_weather(w)
+
+
+async def _execute_tool_call(name: str, args: dict, session_loc: dict | None) -> str:
+    """工具执行器：按名字分发到对应客户端；单工具失败不影响整轮对话"""
+    if name == "get_weather":
+        return await _execute_weather(args, session_loc, settings.default_city)
+    if name == "web_search":
+        from app.clients import search_client
+        query = (args.get("query") or "").strip()
+        if not query:
+            return "搜索词为空"
+        return await search_client.search_web(query)
+    return f"未知工具：{name}"
 
 
 # 按句切分：中文标点后断句，问号/叹号/省略号都算句尾；
@@ -150,8 +186,14 @@ class VoiceChatService:
         yield {"type": "user", "text": user_text}
 
         # 2. LLM 流式生成 + 工具调用 + 按句切分
-        # 把定位/默认城市写进系统提示，避免模型瞎猜城市
-        system_content = SYSTEM_PROMPT
+        # 把当前时间写进系统提示：模型记忆会过期，时间问题（今天是几号/最近新闻）靠它纠偏
+        now = datetime.datetime.now()
+        weekday_cn = "一二三四五六日"[now.weekday()]
+        system_content = (
+            SYSTEM_PROMPT
+            + f"\n现在是 {now.year}年{now.month}月{now.day}日 星期{weekday_cn} {now.hour:02d}:{now.minute:02d}。"
+              "涉及「最近/今天/现在」的搜索词，把具体日期写进去。"
+        )
         if session_loc:
             system_content += (
                 f"\n用户当前位置：{session_loc.get('city')}。"
@@ -172,7 +214,7 @@ class VoiceChatService:
             tool_calls: list[dict] = []
 
             async for event in OllamaClient.stream_chat_reply(
-                messages, tools=[WEATHER_TOOL]
+                messages, tools=AGENT_TOOLS
             ):
                 if event["type"] == "tool_call":
                     tool_calls.append(event)
@@ -214,9 +256,9 @@ class VoiceChatService:
                         if isinstance(tc["arguments"], dict)
                         else json.loads(tc["arguments"] or "{}")
                     )
-                    result = await _execute_weather(args, session_loc, settings.default_city)
+                    result = await _execute_tool_call(tc["name"], args, session_loc)
                 except Exception as e:
-                    result = f"天气查询失败：{e}"
+                    result = f"工具调用失败：{e}"
                 messages.append({
                     "role": "tool",
                     "content": result,

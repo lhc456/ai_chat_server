@@ -10,6 +10,8 @@ class Settings(BaseSettings):
     ollama_keep_alive: str = "30m"        # 模型在内存中的保活时长，避免频繁冷启动（首次加载要 ~20s）
     # 天气工具
     default_city: str = "杭州"             # 问天气没说城市且无定位时的默认城市
+    # 联网搜索工具（Exa）
+    exa_api_key: str = ""                  # https://dashboard.exa.ai/keys 获取
     # 语音对话配置
     voice_ai_enabled: bool = False        # AI对话开关：AI就绪前先关闭，只开放 TTS/ASR 两个基础功能
     asr_model_size: str = "base"          # faster-whisper 模型: tiny/base/small/medium/large-v3

@@ -18,6 +18,7 @@
 | 🤖 完整语音对话 | 录音 → 识别 → AI 回复 → 合成语音返回 | `POST /api/voice/interaction` 🔒 |
 | 🌊 流式语音对话 | WebSocket：LLM 按句生成边合成边推，支持上下文连续对话 | `WS /api/voice/ws` 🔒 |
 | 🌤️ 天气查询（工具调用） | LLM 自动调用 get_weather 查真实天气并给穿衣/防晒/带伞建议；支持设备定位 | 集成在对话中 🔒 |
+| 🔍 联网搜索（工具调用） | 做饭菜谱/生活常识/时事问题，LLM 自动调 web_search 联网查证后回答（Exa） | 集成在对话中 🔒 |
 | ❤️ 健康检查 | 服务状态确认 | `GET /` |
 
 > 🔒 `/interaction` 需要 `.env` 中设置 `VOICE_AI_ENABLED=true` 且本地 Ollama 已就绪，否则返回 503。
@@ -198,6 +199,7 @@ bash test_voice.sh   # TTS 合成并播放 → ASR 回环识别 → AI 开关检
 | `OLLAMA_BASE_URL` | `http://localhost:11434` | Ollama 服务地址 |
 | `OLLAMA_MODEL` | `qwen3:8b` | 使用的本地大模型 |
 | `DEFAULT_CITY` | `杭州` | 问天气没说城市且无定位时的默认城市 |
+| `EXA_API_KEY` | 无 | Exa 联网搜索 Key（不配置则搜索工具不可用，其他功能不受影响），dashboard.exa.ai 获取 |
 
 ## 🔓 启用完整 AI 语音对话
 
