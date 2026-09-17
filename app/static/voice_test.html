@@ -66,6 +66,9 @@
     display: none;
   }
   .hint { font-size: 12px; color: #aaa; margin-top: 10px; line-height: 1.6; }
+  .ws-user { color: #1a6fb5; margin: 2px 0; }
+  .ws-reply { color: #2a7d4f; margin: 2px 0; }
+  .ws-meta { color: #aaa; font-size: 12px; margin: 4px 0; }
 </style>
 </head>
 <body>
@@ -101,6 +104,18 @@
     也可以上传本地音频文件：
     <input type="file" id="fileInput" accept="audio/*" style="margin-left:4px;">
   </div>
+</div>
+
+<!-- 流式语音对话 -->
+<div class="card">
+  <h2>3️⃣ 完整语音对话（流式）</h2>
+  <div class="row">
+    <button id="wsBtn" onclick="wsToggle()">🎤 开始说话（再点发送）</button>
+    <button id="wsResetBtn" onclick="wsReset()" disabled>🧹 清空上下文</button>
+    <span id="wsStatus" class="status"></span>
+  </div>
+  <div id="wsChat" class="result" style="display:block"></div>
+  <div class="hint">流式模式：AI 每生成一句话就立刻合成播放，不用等整段回复；支持连续对话（记住最近几轮上下文）。</div>
 </div>
 
 <script>
@@ -237,6 +252,104 @@ async function transcribe(blob) {
 function setStatus(el, cls, msg) {
   el.className = 'status ' + (cls || '');
   el.textContent = msg;
+}
+
+/* ---------- ③ 流式语音对话（WebSocket） ---------- */
+let ws = null;
+let wsRecording = false;
+let wsStream = null;
+let wsRecorder = null;
+let wsChunks = [];
+let audioQueue = [];   // 待播放的音频 Blob 队列
+let isPlaying = false;
+
+function wsAppendLine(cls, text) {
+  const line = document.createElement('div');
+  line.className = cls;
+  line.textContent = text;
+  document.getElementById('wsChat').appendChild(line);
+}
+
+function wsToggle() { wsRecording ? stopWsRec() : startWsRec(); }
+
+async function startWsRec() {
+  const btn = document.getElementById('wsBtn');
+  const status = document.getElementById('wsStatus');
+  try {
+    wsStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+  } catch (e) { setStatus(status, 'err', '❌ 无法访问麦克风：' + e.message); return; }
+
+  // WebSocket 常驻：断线重建；连接就绪后再开录，避免首帧丢失
+  if (!ws || ws.readyState > 1) {
+    ws = new WebSocket((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/api/voice/ws');
+    ws.onmessage = onWsMessage;
+    try {
+      await new Promise((res, rej) => {
+        ws.onopen = res; ws.onerror = rej;
+        setTimeout(() => rej(new Error('连接超时')), 5000);
+      });
+    } catch (e) { setStatus(status, 'err', '❌ 连接服务失败'); return; }
+  }
+
+  wsRecorder = new MediaRecorder(wsStream, { mimeType: 'audio/webm;codecs=opus' });
+  wsChunks = [];
+  wsRecorder.ondataavailable = e => wsChunks.push(e.data);
+  wsRecorder.onstop = () => {
+    wsStream.getTracks().forEach(t => t.stop());
+    new Blob(wsChunks, { type: 'audio/webm;codecs=opus' }).arrayBuffer()
+      .then(buf => ws.send(buf));
+    setStatus(status, '', '⏳ 识别中… AI 正在思考');
+  };
+  wsRecorder.start();
+  wsRecording = true;
+  btn.textContent = '⏹ 说完了，发送';
+  btn.classList.add('rec');
+  setStatus(status, '', '🔴 录音中… 说完点一下发送');
+  document.getElementById('wsResetBtn').disabled = false;
+}
+
+function stopWsRec() {
+  if (wsRecorder && wsRecorder.state === 'recording') wsRecorder.stop();
+  wsRecording = false;
+  const btn = document.getElementById('wsBtn');
+  btn.textContent = '🎤 开始说话（再点发送）';
+  btn.classList.remove('rec');
+}
+
+function onWsMessage(e) {
+  const status = document.getElementById('wsStatus');
+  let msg; try { msg = JSON.parse(e.data); } catch { return; }
+
+  if (msg.type === 'user') {
+    wsAppendLine('ws-user', '你：' + msg.text);
+  } else if (msg.type === 'sentence') {
+    // 一句话音频到手立刻入队播放，这就是流式的意义
+    const bytes = Uint8Array.from(atob(msg.audio_b64), c => c.charCodeAt(0));
+    audioQueue.push(new Blob([bytes], { type: 'audio/mpeg' }));
+    wsAppendLine('ws-reply', '🔊 ' + msg.text);
+    drainQueue();
+    setStatus(status, '', '🔊 边生成边播放中…');
+  } else if (msg.type === 'done') {
+    wsAppendLine('ws-meta', '⏱ 本轮 ' + msg.elapsed_ms + 'ms');
+    setStatus(status, 'ok', '✅ 本轮完成，' + msg.elapsed_ms + 'ms');
+  } else if (msg.type === 'error') {
+    setStatus(status, 'err', '❌ ' + msg.message);
+  }
+}
+
+// 播放队列：上一句播完自动接下一句，避免两句重叠
+function drainQueue() {
+  if (isPlaying || audioQueue.length === 0) return;
+  isPlaying = true;
+  const url = URL.createObjectURL(audioQueue.shift());
+  const a = new Audio(url);
+  a.onended = () => { URL.revokeObjectURL(url); isPlaying = false; drainQueue(); };
+  a.play();
+}
+
+function wsReset() {
+  if (ws && ws.readyState === 1) ws.send(JSON.stringify({ type: 'reset' }));
+  document.getElementById('wsChat').innerHTML = '';
 }
 </script>
 </body>

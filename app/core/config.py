@@ -7,6 +7,7 @@ class Settings(BaseSettings):
     # Ollama 本地大模型配置
     ollama_base_url: str = "http://localhost:11434"
     ollama_model: str = "qwen3:8b"          # 本机已拉取的模型
+    ollama_keep_alive: str = "30m"        # 模型在内存中的保活时长，避免频繁冷启动（首次加载要 ~20s）
     # 语音对话配置
     voice_ai_enabled: bool = False        # AI对话开关：AI就绪前先关闭，只开放 TTS/ASR 两个基础功能
     asr_model_size: str = "base"          # faster-whisper 模型: tiny/base/small/medium/large-v3

@@ -1,7 +1,17 @@
+import base64
 import json
 import time
 
-from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile
+from fastapi import (
+    APIRouter,
+    File,
+    Form,
+    HTTPException,
+    Query,
+    UploadFile,
+    WebSocket,
+    WebSocketDisconnect,
+)
 from fastapi.responses import Response, StreamingResponse
 
 from app.clients import tts_client
@@ -128,18 +138,92 @@ async def voice_interaction(audio: UploadFile = File(..., description="录音音
         raise HTTPException(status_code=503, detail=f"语音服务暂时不可用: {e}")
 
     # audio 是二进制，不能直接进 JSON；分开返回：
-    # - X-User-Text / X-Reply-Text 头携带文字（JSON编码保证中文安全）
+    # - X-User-Text / X-Reply-Text 头携带文字：ensure_ascii=True 转成 \uXXXX，
+    #   HTTP 头只支持 latin-1，中文原样塞进云会崩 500；客户端拿到后 JSON.parse 还原
     # - 响应体是 mp3 音频流，客户端拿到就能直接播放
     return Response(
         content=result.audio,
         media_type="audio/mpeg",
         headers={
-            "X-User-Text": json.dumps(result.user_text, ensure_ascii=False),
-            "X-Reply-Text": json.dumps(result.reply_text, ensure_ascii=False),
+            "X-User-Text": json.dumps(result.user_text, ensure_ascii=True),
+            "X-Reply-Text": json.dumps(result.reply_text, ensure_ascii=True),
             "X-Elapsed-Ms": str(result.elapsed_ms),
             "Content-Disposition": 'inline; filename="reply.mp3"',
         },
     )
+
+
+@router.websocket("/ws")
+async def voice_ws(ws: WebSocket):
+    """
+    全链路流式语音对话（WebSocket）
+
+    上行（客户端 → 服务端）：
+    - 二进制帧：一段完整录音（webm/wav/mp3 等，说完一句发一次）
+    - 文本帧：  {"type": "reset"} 清空对话上下文
+
+    下行（服务端 → 客户端），均为 JSON 文本帧：
+    - {"type": "user", "text": "..."}                         识别出的用户文字
+    - {"type": "sentence", "text": "...", "audio_b64": "..."}  一句话及其 mp3（base64），
+                                                              客户端收到即可播放
+    - {"type": "done", "text": "...", "elapsed_ms": 1234}      本轮完成，附全文与总耗时
+    - {"type": "error", "message": "..."}                      出错
+    """
+    await ws.accept()
+    history: list[dict] = []
+    try:
+        while True:
+            frame = await ws.receive()
+            if frame["type"] == "websocket.disconnect":
+                break
+
+            # 文本帧：控制指令
+            if frame.get("text"):
+                try:
+                    ctrl = json.loads(frame["text"])
+                except json.JSONDecodeError:
+                    continue
+                if ctrl.get("type") == "reset":
+                    history.clear()
+                    await ws.send_json({"type": "reset_ok"})
+                continue
+
+            # 二进制帧：音频
+            audio_bytes = frame.get("bytes")
+            if not audio_bytes:
+                continue
+            if len(audio_bytes) > 20 * 1024 * 1024:
+                await ws.send_json({"type": "error", "message": "音频文件过大（限制 20MB）"})
+                continue
+            if not settings.voice_ai_enabled:
+                await ws.send_json({"type": "error", "message": "AI对话功能尚未开启（voice_ai_enabled=false）"})
+                continue
+
+            try:
+                async for event in VoiceChatService.streaming_conversation(audio_bytes, history=history):
+                    if event["type"] == "user":
+                        history.append({"role": "user", "content": event["text"]})
+                        await ws.send_json({"type": "user", "text": event["text"]})
+                    elif event["type"] == "sentence":
+                        await ws.send_json({
+                            "type": "sentence",
+                            "text": event["text"],
+                            "audio_b64": base64.b64encode(event["audio"]).decode(),
+                        })
+                    else:  # done
+                        if event["text"]:
+                            history.append({"role": "assistant", "content": event["text"]})
+                        await ws.send_json({
+                            "type": "done",
+                            "text": event["text"],
+                            "elapsed_ms": event["elapsed_ms"],
+                        })
+            except ValueError as e:
+                await ws.send_json({"type": "error", "message": str(e)})
+            except Exception as e:
+                await ws.send_json({"type": "error", "message": f"语音服务暂时不可用: {e}"})
+    except WebSocketDisconnect:
+        pass
 
 
 def _read_audio(audio: UploadFile) -> bytes:

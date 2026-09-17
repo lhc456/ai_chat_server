@@ -16,6 +16,7 @@
 | 🔊 语音合成（TTS） | edge-tts 中文发音人，文字合成 mp3 音频 | `POST /api/voice/synthesize` |
 | ⚡ 流式语音合成 | 边合成边返回，首音延迟实测 ~1.3s（整段模式 ~1.7~2.4s）；剩余 1.3s 为 edge-tts 云端握手下限，后续可用本地引擎进一步压低 | `GET /api/voice/synthesize/stream` |
 | 🤖 完整语音对话 | 录音 → 识别 → AI 回复 → 合成语音返回 | `POST /api/voice/interaction` 🔒 |
+| 🌊 流式语音对话 | WebSocket：LLM 按句生成边合成边推，支持上下文连续对话 | `WS /api/voice/ws` 🔒 |
 | ❤️ 健康检查 | 服务状态确认 | `GET /` |
 
 > 🔒 `/interaction` 需要 `.env` 中设置 `VOICE_AI_ENABLED=true` 且本地 Ollama 已就绪，否则返回 503。
@@ -152,6 +153,15 @@ curl -X POST http://localhost:8000/api/voice/transcribe \
 # {"text": "今天天气真不错", "elapsed_ms": 850}
 ```
 
+**流式语音对话**（WebSocket，边生成边播放，支持上下文）：
+
+```js
+const ws = new WebSocket('ws://localhost:8000/api/voice/ws');
+// 上行：二进制帧 = 一段完整录音；文本帧 {"type":"reset"} 清空上下文
+// 下行：{type:"user"} 识别结果 / {type:"sentence",audio_b64} 逐句语音(base64 mp3)
+//       / {type:"done",text,elapsed_ms} 本轮完成 / {type:"error",message}
+```
+
 **完整语音对话**（需先启用 AI，见下文）：
 
 ```bash
@@ -209,6 +219,6 @@ bash test_voice.sh   # TTS 合成并播放 → ASR 回环识别 → AI 开关检
 | 阶段 | 内容 | 状态 |
 |------|------|------|
 | 第1步 | 服务端语音对话 MVP（电脑可测，无需硬件） | ✅ 已完成 |
-| 第2步 | 对话上下文 + WebSocket 流式传输 | ⬜ |
-| 第3步 | 设备端客户端（录音、播放、唤醒词） | ⬜ |
+| 第2步 | 对话上下文 + WebSocket 流式传输（按句边生成边播） | ✅ 已完成 |
+| 第3步 | 设备端客户端（录音、播放、唤醒词，ESP32 走同一 WS 协议） | ⬜ |
 | 第4步 | LED 显示屏驱动 + 文字/表情推送协议 | ⬜ |
