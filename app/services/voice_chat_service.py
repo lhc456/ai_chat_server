@@ -28,6 +28,12 @@ SYSTEM_PROMPT = (
     "③ 语调有起伏，重要的话可以带点感叹，遇到安慰、提醒时语气放轻放暖；"
     "④ 严禁输出任何 emoji 表情符号和 markdown 格式（会被语音合成念出怪音）；不要书面语和长句堆叠，断句要符合说话节奏。"
     "⑤ 调 web_search 时把搜索词写具体（带上主题、必要的时间和地点），不要用「最近」「最新」这种模糊词。"
+    "⑥ 报天气固定用这个顺序：天气现象 → 今日最低~最高温度 → 当前温度 → 建议 → 景点推荐；"
+    "⑦ 建议必须结合当天实际情况灵活推理，禁止每次套同一句模板："
+    "周末且温度舒适就鼓励出门活动；气温高（≥32度）就提醒防晒补水并推荐室内安排；"
+    "有雨提醒带伞推室内；工作日早晚出门就提通勤注意；降水概率高也提前说；"
+    "工具结果里给了景点参考就自然带出来，景点名必须用工具结果里的原名，严禁自己编造或替换其他地名；"
+    "例：「今天杭州晴，今天21到31度，现在26度，周末天气挺舒服的，适合出门走走，可以去西湖沿苏堤白堤逛逛」"
 )
 
 
@@ -88,7 +94,36 @@ async def _execute_weather(args: dict, session_loc: dict | None, default_city: s
             city = default_city
 
     w = await weather_client.get_weather(city, lat=lat, lon=lon)
-    return weather_client.format_weather(w)
+    result = weather_client.format_weather(w)
+
+    # 拼接就近场景化推荐（区级定位 + 星期/时段 + 天气筛选，垂直场景第一块拼图）
+    try:
+        from app.clients import poi_client
+
+        district = None
+        rec_city = w["city"]
+        # 有定位时反查所在区，推荐就近去处；失败降级为全市推荐
+        if lat is not None and lon is not None:
+            loc = await weather_client.reverse_district(lat, lon)
+            if loc and loc[1]:
+                district = loc[1]  # 城市名可能为空，用天气查询的城市名兜底
+
+        now = datetime.datetime.now()
+        rec = poi_client.recommend(
+            rec_city,
+            district,
+            w["today"]["code"],
+            w["today"]["max"],
+            now.month,
+            now.weekday(),
+            now.hour,
+        )
+        if rec:
+            scope = f"（{rec_city}{district or ''}）" if district else f"（{rec_city}）"
+            result += f"；{scope}{rec}"
+    except Exception:
+        pass  # 景点推荐失败不影响天气主流程
+    return result
 
 
 async def _execute_tool_call(name: str, args: dict, session_loc: dict | None) -> str:

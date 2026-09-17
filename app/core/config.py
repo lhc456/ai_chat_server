@@ -7,7 +7,7 @@ class Settings(BaseSettings):
     # Ollama 本地大模型配置
     ollama_base_url: str = "http://localhost:11434"
     ollama_model: str = "qwen3:8b"          # 本机已拉取的模型
-    ollama_keep_alive: str = "30m"        # 模型在内存中的保活时长，避免频繁冷启动（首次加载要 ~20s）
+    ollama_keep_alive: str = "8h"         # 模型在内存中的保活时长：家用场景一开机一整天，避免中途冷启动（首次加载 ~20s）
     # 天气工具
     default_city: str = "杭州"             # 问天气没说城市且无定位时的默认城市
     # 联网搜索工具（Exa）

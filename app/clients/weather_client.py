@@ -30,8 +30,23 @@ def _desc(code) -> str:
 
 
 _geo_cache: dict[str, tuple[float, float]] = {}
+_reverse_cache: dict[tuple, tuple[str, str] | None] = {}  # 坐标 → (城市, 区)， keyed by 约1km精度
 _weather_cache: dict[str, tuple[float, dict]] = {}  # key → (过期时间, 数据)
 _WEATHER_TTL = 20 * 60  # 天气缓存 20 分钟
+
+
+async def _fetch(url: str, params: dict) -> dict:
+    """带一次重试的 GET：外网偶发抖动时不至于整轮失败"""
+    last_err = None
+    for _ in range(2):
+        try:
+            async with httpx.AsyncClient(timeout=12) as client:
+                r = await client.get(url, params=params)
+                r.raise_for_status()
+                return r.json()
+        except (httpx.TimeoutException, httpx.HTTPError) as e:
+            last_err = e
+    raise last_err
 
 
 async def geocode(city: str) -> tuple[float, float] | None:
@@ -39,19 +54,55 @@ async def geocode(city: str) -> tuple[float, float] | None:
     if city in _geo_cache:
         return _geo_cache[city]
 
-    async with httpx.AsyncClient(timeout=10) as client:
-        r = await client.get(
-            "https://geocoding-api.open-meteo.com/v1/search",
-            params={"name": city, "count": 1, "language": "zh", "format": "json"},
-        )
-        r.raise_for_status()
-        results = r.json().get("results") or []
-        if not results:
-            return None
-        loc = (results[0]["latitude"], results[0]["longitude"])
+    results = (await _fetch(
+        "https://geocoding-api.open-meteo.com/v1/search",
+        {"name": city, "count": 1, "language": "zh", "format": "json"},
+    )).get("results") or []
+    if not results:
+        return None
+    loc = (results[0]["latitude"], results[0]["longitude"])
 
     _geo_cache[city] = loc
     return loc
+
+
+async def reverse_district(lat: float, lon: float) -> tuple[str, str] | None:
+    """
+    坐标 → (城市, 区)，就近推荐的依据（OSM Nominatim，免费无 Key）
+
+    返回如 ("杭州", "西湖区")；失败返回 None（推荐降级为全市范围）
+    """
+    key = (round(lat, 2), round(lon, 2))
+    if key in _reverse_cache:
+        return _reverse_cache[key]
+
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            r = await client.get(
+                "https://nominatim.openstreetmap.org/reverse",
+                params={"lat": lat, "lon": lon, "zoom": 10, "accept-language": "zh-CN", "format": "json"},
+                headers={"User-Agent": "ai-server-voice-box/0.1"},  # Nominatim 要求带 UA
+            )
+            r.raise_for_status()
+            addr = r.json().get("address", {})
+    except Exception:
+        _reverse_cache[key] = None
+        return None
+
+    # 中国行政区划在 OSM 里的层级不统一：区可能出现在 city 字段（如"西湖区"），
+    # 街道在 city_district；做兼容解析
+    city_raw = addr.get("city") or ""
+    if city_raw.endswith("区"):
+        district, city = city_raw, ""
+    else:
+        city = city_raw.rstrip("市")
+        district = (
+            addr.get("city_district") or addr.get("suburb")
+            or addr.get("district") or addr.get("county")
+        )
+    val = (city or None, district) if district else None
+    _reverse_cache[key] = val
+    return val
 
 
 async def get_weather(city: str, lat: float = None, lon: float = None) -> dict:
@@ -82,10 +133,7 @@ async def get_weather(city: str, lat: float = None, lon: float = None) -> dict:
         "timezone": "auto",
         "forecast_days": 2,
     }
-    async with httpx.AsyncClient(timeout=10) as client:
-        r = await client.get("https://api.open-meteo.com/v1/forecast", params=params)
-        r.raise_for_status()
-        d = r.json()
+    d = await _fetch("https://api.open-meteo.com/v1/forecast", params)
 
     cur, daily = d["current"], d["daily"]
     data = {
@@ -99,6 +147,7 @@ async def get_weather(city: str, lat: float = None, lon: float = None) -> dict:
         },
         "today": {
             "desc": _desc(daily["weather_code"][0]),
+            "code": int(daily["weather_code"][0]),
             "max": daily["temperature_2m_max"][0],
             "min": daily["temperature_2m_min"][0],
             "precip_prob": daily["precipitation_probability_max"][0],
@@ -115,11 +164,34 @@ async def get_weather(city: str, lat: float = None, lon: float = None) -> dict:
 
 
 def format_weather(w: dict) -> str:
-    """把天气数据压成一句中文，喂给 LLM 当工具结果"""
+    """把天气数据压成一段中文，喂给 LLM 当工具结果（含环境线索，供模型灵活生成建议）"""
+    import datetime
+
     c, t, m = w["current"], w["today"], w["tomorrow"]
+
+    now = datetime.datetime.now()
+    weekday = now.weekday()  # 0=周一 … 6=周日
+    day_type = "周末" if weekday >= 5 else "工作日"
+    hour = now.hour
+    if 6 <= hour < 11:
+        period = "上午"
+    elif 11 <= hour < 14:
+        period = "中午"
+    elif 14 <= hour < 18:
+        period = "下午"
+    elif 18 <= hour < 23:
+        period = "晚上"
+    else:
+        period = "深夜"
+
+    # 温差与舒适度线索
+    temp_span = round(t["max"] - t["min"], 1)
+    comfort = "温度舒适" if 18 <= t["max"] <= 28 else ("偏热" if t["max"] > 32 else "偏凉")
+
     return (
-        f"{w['city']}当前{c['desc']}，{c['temp']}°C（体感{c['feels']}°C），"
-        f"湿度{c['humidity']}%，风速{c['wind']}km/h；"
-        f"今天{t['desc']}，{t['min']}~{t['max']}°C，降水概率{t['precip_prob']}%；"
-        f"明天{m['desc']}，{m['min']}~{m['max']}°C，降水概率{m['precip_prob']}%"
+        f"{w['city']}当前{c['desc']}，湿度{c['humidity']}%，风速{c['wind']}km/h；"
+        f"今天{t['desc']}，气温{t['min']}~{t['max']}°C（{comfort}，温差{temp_span}度），"
+        f"降水概率{t['precip_prob']}%；"
+        f"明天{m['desc']}，{m['min']}~{m['max']}°C，降水概率{m['precip_prob']}%；"
+        f"现在是{day_type}{period}。请结合周末/工作日、时段、温度舒适度、降水概率给出针对性建议"
     )

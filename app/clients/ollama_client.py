@@ -42,6 +42,7 @@ class OllamaClient:
             "keep_alive": settings.ollama_keep_alive,
             "options": {
                 "temperature": temperature,
+                "num_predict": 120,  # 语音回复不需要长文，限制生成长度加速
             }
         }
 
@@ -90,7 +91,7 @@ class OllamaClient:
             "stream": True,   # NDJSON 逐行返回
             "think": False,   # 语音对话要短平快，关闭思考模式
             "keep_alive": settings.ollama_keep_alive,
-            "options": {"temperature": temperature},
+            "options": {"temperature": temperature, "num_predict": 120},
         }
         if tools:
             payload["tools"] = tools

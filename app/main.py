@@ -16,10 +16,24 @@ app.include_router(voice_router, prefix="/api/voice", tags=["voice"])
 
 
 @app.on_event("startup")
-async def preload_asr_model():
-    """启动时预加载 ASR 模型，避免第一个请求等太久"""
+async def preload_models():
+    """启动时预热：ASR 模型 + LLM 保活，避免第一个请求等太久"""
+    import asyncio
+
     from app.clients import asr_client
     asr_client._get_model()
+
+    # 后台预热 LLM（和 Ollama 建立一次空对话，把模型拉进内存并续上 keep_alive）
+    async def warm_llm():
+        try:
+            from app.clients.ollama_client import OllamaClient
+            await OllamaClient.create_chat_reply([
+                {"role": "user", "content": "好的"}
+            ])
+        except Exception as e:
+            print(f"[预热] LLM 暂不可用（启动后首次对话会慢一些）: {e}")
+
+    asyncio.create_task(warm_llm())
 
 
 @app.get("/", summary="服务健康检查")
