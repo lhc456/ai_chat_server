@@ -19,7 +19,7 @@ class OllamaClient:
         temperature: float = 0.7
     ) -> str:
         """
-        调用 Ollama API 生成对话回复
+        调用 Ollama API 生成对话回复（整段返回）
 
         Args:
             messages: 对话消息列表，格式为 [{"role": "user", "content": "..."}]
@@ -38,8 +38,8 @@ class OllamaClient:
             "model": model,
             "messages": messages,
             "stream": False,  # 不使用流式响应
-            "think": False,   # 关闭 qwen3 思考模式：语音对话要短平快，思考会多烧 ~7s
-            "keep_alive": settings.ollama_keep_alive,  # 模型常驻内存，避免每次冷启动 ~20s
+            "think": False,   # 关闭 qwen3 思考模式：语音对话要短平快
+            "keep_alive": settings.ollama_keep_alive,
             "options": {
                 "temperature": temperature,
             }
@@ -68,13 +68,17 @@ class OllamaClient:
         cls,
         messages: list[dict],
         model: str = None,
-        temperature: float = 0.7
+        temperature: float = 0.7,
+        tools: list[dict] = None,
     ):
         """
-        流式调用 Ollama：逐 token 产出回复文本，供上层按句切分后边生成边合成
+        流式调用 Ollama：逐 token 产出，供上层按句切分后边生成边合成
 
         Yields:
-            每个 delta 的文本增量（str）
+            {"type": "text", "content": str}          文本增量
+            {"type": "tool_call", "name": str, "arguments": dict|str}
+                                                      模型发起的工具调用
+                                                      （Ollama 通常一次性给出完整调用）
         """
         if model is None:
             model = settings.ollama_model
@@ -88,6 +92,8 @@ class OllamaClient:
             "keep_alive": settings.ollama_keep_alive,
             "options": {"temperature": temperature},
         }
+        if tools:
+            payload["tools"] = tools
 
         try:
             # read 超时放宽：生成过程中两块数据之间的最大等待
@@ -99,9 +105,20 @@ class OllamaClient:
                         if not line.strip():
                             continue
                         data = json.loads(line)
-                        delta = data.get("message", {}).get("content", "")
+                        message = data.get("message", {})
+
+                        delta = message.get("content", "")
                         if delta:
-                            yield delta
+                            yield {"type": "text", "content": delta}
+
+                        for tc in message.get("tool_calls") or []:
+                            fn = tc.get("function", {})
+                            yield {
+                                "type": "tool_call",
+                                "name": fn.get("name", ""),
+                                "arguments": fn.get("arguments", {}),
+                            }
+
                         if data.get("done"):
                             break
         except httpx.ConnectError:

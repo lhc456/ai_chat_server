@@ -171,6 +171,7 @@ async def voice_ws(ws: WebSocket):
     """
     await ws.accept()
     history: list[dict] = []
+    session_loc: dict | None = None  # 设备/浏览器定位，问天气没说城市时用
     try:
         while True:
             frame = await ws.receive()
@@ -186,6 +187,17 @@ async def voice_ws(ws: WebSocket):
                 if ctrl.get("type") == "reset":
                     history.clear()
                     await ws.send_json({"type": "reset_ok"})
+                elif ctrl.get("type") == "location":
+                    # 设备/浏览器定位：{"type":"location","lat":30.27,"lon":120.15}
+                    try:
+                        session_loc = {
+                            "lat": float(ctrl["lat"]),
+                            "lon": float(ctrl["lon"]),
+                            "city": ctrl.get("city") or "当前位置",
+                        }
+                        await ws.send_json({"type": "location_ok", "city": session_loc["city"]})
+                    except (KeyError, TypeError, ValueError):
+                        await ws.send_json({"type": "error", "message": "定位格式错误，需要 lat/lon 数字"})
                 continue
 
             # 二进制帧：音频
@@ -200,7 +212,9 @@ async def voice_ws(ws: WebSocket):
                 continue
 
             try:
-                async for event in VoiceChatService.streaming_conversation(audio_bytes, history=history):
+                async for event in VoiceChatService.streaming_conversation(
+                    audio_bytes, history=history, session_loc=session_loc
+                ):
                     if event["type"] == "user":
                         history.append({"role": "user", "content": event["text"]})
                         await ws.send_json({"type": "user", "text": event["text"]})

@@ -115,7 +115,11 @@
     <span id="wsStatus" class="status"></span>
   </div>
   <div id="wsChat" class="result" style="display:block"></div>
-  <div class="hint">流式模式：AI 每生成一句话就立刻合成播放，不用等整段回复；支持连续对话（记住最近几轮上下文）。</div>
+  <div class="row">
+    <button id="locBtn" onclick="wsSendLocation()">📍 上报浏览器定位</button>
+    <span id="locStatus" class="status"></span>
+  </div>
+  <div class="hint">流式模式：AI 每生成一句话就立刻合成播放；支持连续对话和天气查询（问「今天天气怎么样」会查真实数据并给穿衣/防晒/带伞建议）。上报定位后，问天气不用再说城市名。</div>
 </div>
 
 <script>
@@ -332,6 +336,8 @@ function onWsMessage(e) {
   } else if (msg.type === 'done') {
     wsAppendLine('ws-meta', '⏱ 本轮 ' + msg.elapsed_ms + 'ms');
     setStatus(status, 'ok', '✅ 本轮完成，' + msg.elapsed_ms + 'ms');
+  } else if (msg.type === 'location_ok') {
+    wsAppendLine('ws-meta', '📍 定位已就绪：' + msg.city);
   } else if (msg.type === 'error') {
     setStatus(status, 'err', '❌ ' + msg.message);
   }
@@ -350,6 +356,25 @@ function drainQueue() {
 function wsReset() {
   if (ws && ws.readyState === 1) ws.send(JSON.stringify({ type: 'reset' }));
   document.getElementById('wsChat').innerHTML = '';
+}
+
+/* 上报浏览器定位：问天气就不用再说城市名 */
+function wsSendLocation() {
+  const status = document.getElementById('locStatus');
+  if (!navigator.geolocation) { setStatus(status, 'err', '❌ 浏览器不支持定位'); return; }
+  setStatus(status, '', '定位中…');
+  navigator.geolocation.getCurrentPosition(async pos => {
+    const { latitude: lat, longitude: lon } = pos.coords;
+    if (!ws || ws.readyState > 1) {
+      ws = new WebSocket((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/api/voice/ws');
+      await new Promise(res => { ws.onopen = res; });
+      ws.onmessage = onWsMessage;
+    }
+    ws.send(JSON.stringify({ type: 'location', lat, lon }));
+    setStatus(status, 'ok', '✅ 已上报定位（' + lat.toFixed(3) + ', ' + lon.toFixed(3) + '）');
+  }, err => {
+    setStatus(status, 'err', '❌ 定位失败：' + err.message + '（可以在 .env 配置默认城市）');
+  }, { timeout: 8000 });
 }
 </script>
 </body>

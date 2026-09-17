@@ -17,6 +17,7 @@
 | ⚡ 流式语音合成 | 边合成边返回，首音延迟实测 ~1.3s（整段模式 ~1.7~2.4s）；剩余 1.3s 为 edge-tts 云端握手下限，后续可用本地引擎进一步压低 | `GET /api/voice/synthesize/stream` |
 | 🤖 完整语音对话 | 录音 → 识别 → AI 回复 → 合成语音返回 | `POST /api/voice/interaction` 🔒 |
 | 🌊 流式语音对话 | WebSocket：LLM 按句生成边合成边推，支持上下文连续对话 | `WS /api/voice/ws` 🔒 |
+| 🌤️ 天气查询（工具调用） | LLM 自动调用 get_weather 查真实天气并给穿衣/防晒/带伞建议；支持设备定位 | 集成在对话中 🔒 |
 | ❤️ 健康检查 | 服务状态确认 | `GET /` |
 
 > 🔒 `/interaction` 需要 `.env` 中设置 `VOICE_AI_ENABLED=true` 且本地 Ollama 已就绪，否则返回 503。
@@ -196,6 +197,7 @@ bash test_voice.sh   # TTS 合成并播放 → ASR 回环识别 → AI 开关检
 | `TTS_PITCH` | `+0Hz` | 音调，默认即最自然；晓伊等音色调高易显假 |
 | `OLLAMA_BASE_URL` | `http://localhost:11434` | Ollama 服务地址 |
 | `OLLAMA_MODEL` | `qwen3:8b` | 使用的本地大模型 |
+| `DEFAULT_CITY` | `杭州` | 问天气没说城市且无定位时的默认城市 |
 
 ## 🔓 启用完整 AI 语音对话
 

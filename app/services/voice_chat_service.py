@@ -8,11 +8,13 @@
 以及一条完整管线（依赖 Ollama AI，需要配置开启）：
 - audio → text → AI → audio  语音对话
 """
+import json
 import re
 import time
 from typing import AsyncGenerator
 
 from app.clients import asr_client, tts_client
+from app.core.config import settings
 from app.models.schemas import SynthesizeResponse, TranscribeResponse, VoiceChatResponse
 
 # 系统提示词：把 AI 定位成音箱助手，回复简短口语化（语音播报太长体验差）
@@ -25,6 +27,45 @@ SYSTEM_PROMPT = (
     "③ 语调有起伏，重要的话可以带点感叹，遇到安慰、提醒时语气放轻放暖；"
     "④ 不要 emoji、不要 markdown、不要书面语和长句堆叠，断句要符合说话节奏。"
 )
+
+
+# 天气工具定义（Ollama tools 格式）：LLM 自己判断何时调用
+WEATHER_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "get_weather",
+        "description": "查询中国城市的实时天气和今明两天预报，当用户问到天气、温度、下雨、穿衣、出行建议时调用",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "city": {"type": "string", "description": "城市名，如：杭州。用户没说城市时传空字符串"},
+                "lat": {"type": "number", "description": "纬度，有设备定位时传，否则省略"},
+                "lon": {"type": "number", "description": "经度，有设备定位时传，否则省略"},
+            },
+            "required": ["city"],
+        },
+    },
+}
+
+
+async def _execute_weather(args: dict, session_loc: dict | None, default_city: str) -> str:
+    """执行天气工具调用：城市 > 会话定位 > 默认城市；返回喂给 LLM 的中文结果"""
+    from app.clients import weather_client
+
+    city = (args.get("city") or "").strip()
+    lat, lon = args.get("lat"), args.get("lon")
+
+    # 对话里没说城市 → 优先用设备定位，再退默认城市
+    if not city:
+        if session_loc:
+            lat = lat if lat is not None else session_loc.get("lat")
+            lon = lon if lon is not None else session_loc.get("lon")
+            city = session_loc.get("city") or "当前位置"
+        else:
+            city = default_city
+
+    w = await weather_client.get_weather(city, lat=lat, lon=lon)
+    return weather_client.format_weather(w)
 
 
 # 按句切分：中文标点后断句，问号/叹号/省略号都算句尾；
@@ -81,9 +122,13 @@ class VoiceChatService:
     async def streaming_conversation(
         audio_bytes: bytes,
         history: list[dict] = None,
+        session_loc: dict = None,
     ) -> AsyncGenerator[dict, None]:
         """
-        全链路流式对话：ASR → LLM 逐 token → 按句切分 → 每句立刻 TTS
+        全链路流式对话：ASR → LLM 逐 token（带工具调用）→ 按句切分 → 每句立刻 TTS
+
+        工具循环：模型要天气数据时，执行 get_weather 把真实数据喂回去重新生成；
+        最多循环 3 次防失控。
 
         事件流（dict）:
             {"type": "user",     "text": str}                  识别结果
@@ -92,6 +137,7 @@ class VoiceChatService:
 
         Args:
             history: 历史消息（[{role, content}]），可为空
+            session_loc: 会话定位 {"lat", "lon", "city"}，问天气没说城市时用
         """
         from app.clients.ollama_client import OllamaClient
 
@@ -103,24 +149,91 @@ class VoiceChatService:
             raise ValueError("未能识别出有效语音内容")
         yield {"type": "user", "text": user_text}
 
-        # 2. LLM 流式生成 + 按句切分
-        messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+        # 2. LLM 流式生成 + 工具调用 + 按句切分
+        # 把定位/默认城市写进系统提示，避免模型瞎猜城市
+        system_content = SYSTEM_PROMPT
+        if session_loc:
+            system_content += (
+                f"\n用户当前位置：{session_loc.get('city')}。"
+                "用户问天气但没说城市时，调 get_weather 不传 city 只传 lat/lon。"
+            )
+        else:
+            system_content += (
+                f"\n用户所在城市：{settings.default_city}。"
+                "用户问天气但没说城市时，调 get_weather 就用这个城市。"
+            )
+        messages = [{"role": "system", "content": system_content}]
         messages += (history or [])[-6:]
         messages.append({"role": "user", "content": user_text})
 
-        buffer = ""
         full_text = ""
-        async for delta in OllamaClient.stream_chat_reply(messages):
-            buffer += delta
-            sentences, buffer = _split_sentences(buffer)
-            for sentence in sentences:
-                full_text += sentence
-                # 3. 每凑齐一句立刻合成，不等全文
-                audio = await tts_client.synthesize(sentence)
-                yield {"type": "sentence", "text": sentence, "audio": audio}
+        for _round in range(3):  # 工具循环上限，防失控
+            buffer = ""
+            tool_calls: list[dict] = []
+
+            async for event in OllamaClient.stream_chat_reply(
+                messages, tools=[WEATHER_TOOL]
+            ):
+                if event["type"] == "tool_call":
+                    tool_calls.append(event)
+                    continue
+                buffer += event["content"]
+                sentences, buffer = _split_sentences(buffer)
+                for sentence in sentences:
+                    full_text += sentence
+                    # 每凑齐一句立刻合成，不等全文
+                    audio = await tts_client.synthesize(sentence)
+                    yield {"type": "sentence", "text": sentence, "audio": audio}
+
+            # 模型没调工具：正常结束
+            if not tool_calls:
+                break
+
+            # 把「模型发起调用」这条消息补进上下文，再执行工具、喂回结果
+            assistant_msg = {"role": "assistant", "content": buffer, "tool_calls": [
+                {
+                    "function": {
+                        "name": tc["name"],
+                        "arguments": tc["arguments"]
+                        if isinstance(tc["arguments"], dict)
+                        else json.loads(tc["arguments"] or "{}"),
+                    },
+                }
+                for tc in tool_calls
+            ]}
+            if buffer:
+                assistant_msg["content"] = buffer
+            else:
+                assistant_msg.pop("content", None)
+            messages.append(assistant_msg)
+
+            for tc in tool_calls:
+                try:
+                    args = (
+                        tc["arguments"]
+                        if isinstance(tc["arguments"], dict)
+                        else json.loads(tc["arguments"] or "{}")
+                    )
+                    result = await _execute_weather(args, session_loc, settings.default_city)
+                except Exception as e:
+                    result = f"天气查询失败：{e}"
+                messages.append({
+                    "role": "tool",
+                    "content": result,
+                    "name": tc["name"],
+                })
+            # 继续下一轮：模型拿到真实数据后生成最终回复
+        else:
+            fallback = "这个问题我想了太久，换一个问法试试吧"
+            full_text += fallback
+            yield {
+                "type": "sentence",
+                "text": fallback,
+                "audio": await tts_client.synthesize(fallback),
+            }
 
         # 收尾：把最后没凑齐一句的余量也合成播出去
-        tail = buffer.strip()
+        tail = buffer.strip() if not tool_calls else ""
         if tail:
             full_text += tail
             audio = await tts_client.synthesize(tail)
