@@ -64,6 +64,8 @@ async def transcribe(audio_bytes: bytes, language: str = "zh") -> str:
                 vad_filter=True,
                 # 提示模型输出简体中文（base/small 模型容易输出繁体）
                 initial_prompt="以下是普通话的句子，请用简体中文输出。",
+                # 热词偏置：专有名词优先匹配，避免同音字错（周杰伦→周年轮）
+                hotwords=settings.asr_hotwords or None,
             ),
         )
 

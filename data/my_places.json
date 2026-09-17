@@ -1,0 +1,14 @@
+{
+  "_说明": "用户自定义地点（建议系统第2层·优先级最高）：编辑后重启服务生效。district 留空表示不限区；vibe 可填 scenic/park/food/indoor；best_months 填月份数字，空数组表示全年",
+  "杭州": {
+    "钱塘区": [
+      {
+        "name": "示例·村口小河边",
+        "desc": "傍晚沿河边走走吹吹风",
+        "vibe": "park",
+        "indoor": false,
+        "best_months": []
+      }
+    ]
+  }
+}

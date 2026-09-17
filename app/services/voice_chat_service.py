@@ -29,7 +29,8 @@ SYSTEM_PROMPT = (
     "④ 严禁输出任何 emoji 表情符号和 markdown 格式（会被语音合成念出怪音）；不要书面语和长句堆叠，断句要符合说话节奏。"
     "⑤ 调 web_search 时把搜索词写具体（带上主题、必要的时间和地点），不要用「最近」「最新」这种模糊词。"
     "⑥ 报天气固定用这个顺序：天气现象 → 今日最低~最高温度 → 当前温度 → 建议 → 景点推荐；"
-    "⑦ 建议必须结合当天实际情况灵活推理，禁止每次套同一句模板："
+    "⑦ 语音识别可能出错字：遇到明显不存在的歌手/歌曲/地名等专有名词，先按发音推断正确的写法再回答（如识别成「周年轮的青花池」，应理解为歌手周杰伦的歌曲《青花瓷》），并用正确名称回应，不要顺着错误字面编造不存在的歌手或歌曲；"
+    "⑧ 建议必须结合当天实际情况灵活推理，禁止每次套同一句模板："
     "周末且温度舒适就鼓励出门活动；气温高（≥32度）就提醒防晒补水并推荐室内安排；"
     "有雨提醒带伞推室内；工作日早晚出门就提通勤注意；降水概率高也提前说；"
     "工具结果里给了景点参考就自然带出来，景点名必须用工具结果里的原名，严禁自己编造或替换其他地名；"
@@ -42,13 +43,21 @@ WEATHER_TOOL = {
     "type": "function",
     "function": {
         "name": "get_weather",
-        "description": "查询中国城市的实时天气和今明两天预报，当用户问到天气、温度、下雨、穿衣、出行建议时调用",
+        "description": (
+            "查询中国城市的天气，支持过去/今天/未来。day 参数传日期偏移："
+            "今天=0，明天=1，后天=2，昨天=-1，前天=-2，大后天=3，以此类推；"
+            "用户问「这周末」就折算成最近的周六对应的偏移。不传默认 0"
+        ),
         "parameters": {
             "type": "object",
             "properties": {
                 "city": {"type": "string", "description": "城市名，如：杭州。用户没说城市时传空字符串"},
                 "lat": {"type": "number", "description": "纬度，有设备定位时传，否则省略"},
                 "lon": {"type": "number", "description": "经度，有设备定位时传，否则省略"},
+                "day": {
+                    "type": "string",
+                    "description": "日期偏移：今天=0，明天=1，后天=2，昨天=-1，前天=-2；不传默认 0",
+                },
             },
             "required": ["city"],
         },
@@ -73,8 +82,52 @@ SEARCH_TOOL = {
     },
 }
 
+SPOTS_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "find_local_spots",
+        "description": (
+            "查找用户所在城市/附近值得去的地方（景点、公园、美食、逛街）。"
+            "仅当用户明确问「去哪玩/附近有什么/有什么好玩的地方/推荐个地方」时才调用；"
+            "普通问天气不要调用，天气工具结果里已含生活建议"
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "city": {"type": "string", "description": "城市名，用户没说时传空字符串"},
+                "lat": {"type": "number", "description": "纬度，有定位时传"},
+                "lon": {"type": "number", "description": "经度，有定位时传"},
+                "tomorrow": {"type": "boolean", "description": "用户问的是明天的事则传 true"},
+            },
+            "required": ["city"],
+        },
+    },
+}
+
 # Agent 工具箱：新增工具在这里注册，执行器在 _execute_tool_call 里加分支
-AGENT_TOOLS = [WEATHER_TOOL, SEARCH_TOOL]
+AGENT_TOOLS = [WEATHER_TOOL, SEARCH_TOOL, SPOTS_TOOL]
+
+
+def _resolve_day_offset(day: str) -> int:
+    """
+    把 LLM 传来的语义化日期折算成日期偏移（今天=0，明天=1，昨天=-1…）
+
+    支持：today/tomorrow/yesterday/day_after_tomorrow/后夭 等英文关键词，
+    以及「+2」「-1」这类数字形式；中文由模型翻译成关键词（工具描述已给映射）。
+    """
+    mapping = {
+        "today": 0, "now": 0,
+        "tomorrow": 1,
+        "day_after_tomorrow": 2,
+        "yesterday": -1,
+        "day_before_yesterday": -2,
+    }
+    if day in mapping:
+        return mapping[day]
+    try:
+        return int(day)  # 直接传偏移数字也支持
+    except (TypeError, ValueError):
+        return 0
 
 
 async def _execute_weather(args: dict, session_loc: dict | None, default_city: str) -> str:
@@ -93,36 +146,31 @@ async def _execute_weather(args: dict, session_loc: dict | None, default_city: s
         else:
             city = default_city
 
+    # 用户问的是哪天：语义化日期（today/tomorrow/yesterday/weekend…）→ 统一折算成日期偏移
+    day = (args.get("day") or "today").strip()
+    offset = _resolve_day_offset(day)
+
     w = await weather_client.get_weather(city, lat=lat, lon=lon)
-    result = weather_client.format_weather(w)
+    result = weather_client.format_weather(w, day=str(offset))
 
-    # 拼接就近场景化推荐（区级定位 + 星期/时段 + 天气筛选，垂直场景第一块拼图）
+    # 第 1 层：活动/生活建议（按目标日期的天气/温度/星期生成，不再永远用“此刻”）
     try:
-        from app.clients import poi_client
-
-        district = None
-        rec_city = w["city"]
-        # 有定位时反查所在区，推荐就近去处；失败降级为全市推荐
-        if lat is not None and lon is not None:
-            loc = await weather_client.reverse_district(lat, lon)
-            if loc and loc[1]:
-                district = loc[1]  # 城市名可能为空，用天气查询的城市名兜底
-
+        from app.clients import activity_client
         now = datetime.datetime.now()
-        rec = poi_client.recommend(
-            rec_city,
-            district,
-            w["today"]["code"],
-            w["today"]["max"],
-            now.month,
-            now.weekday(),
-            now.hour,
+        target_date = datetime.date.today() + datetime.timedelta(days=offset)
+        day_data = w["days"][max(0, min(len(w["days"]) - 1, offset + 2))]
+        # 过去日期用当天气温中位数；今天用当前实测温度；未来用区间中位数
+        temp = w["current"]["temp"] if offset == 0 else (day_data["min"] + day_data["max"]) / 2
+        tips = activity_client.get_activity_tips(
+            day_data["desc"], temp, target_date.month, target_date.weekday(), now.hour
         )
-        if rec:
-            scope = f"（{rec_city}{district or ''}）" if district else f"（{rec_city}）"
-            result += f"；{scope}{rec}"
+        if tips:
+            result += f"；{tips}"
     except Exception:
-        pass  # 景点推荐失败不影响天气主流程
+        pass  # 活动建议失败不影响天气主流程
+
+    # 地点推荐不再默认拼进天气回答——门控到 find_local_spots 工具里，
+    # 用户明确问「去哪玩/附近有什么」才推（不推荐也是一种合理）
     return result
 
 
@@ -136,7 +184,65 @@ async def _execute_tool_call(name: str, args: dict, session_loc: dict | None) ->
         if not query:
             return "搜索词为空"
         return await search_client.search_web(query)
+    if name == "find_local_spots":
+        return await _find_local_spots(args, session_loc, settings.default_city)
     return f"未知工具：{name}"
+
+
+async def _find_local_spots(args: dict, session_loc: dict | None, default_city: str) -> str:
+    """
+    「去哪玩/附近有什么」专用工具（地点推荐门控：只有用户明确问才调用）
+
+    三层降级链路（ROADMAP 建议系统三层化）：
+      自定义地点 → Exa 动态搜当地特色 → 静态库 → 全无则提示只给生活建议
+    """
+    from app.clients import poi_client, search_client, weather_client
+
+    city = (args.get("city") or "").strip()
+    lat, lon = args.get("lat"), args.get("lon")
+
+    if not city:
+        if session_loc:
+            lat = lat if lat is not None else session_loc.get("lat")
+            lon = lon if lon is not None else session_loc.get("lon")
+            city = session_loc.get("city") or "当前位置"
+        else:
+            city = default_city
+
+    # 反查区（就近推荐用）
+    district = None
+    if lat is not None and lon is not None:
+        loc = await weather_client.reverse_district(lat, lon)
+        if loc and loc[1]:
+            district = loc[1]
+
+    now = datetime.datetime.now()
+    is_tomorrow = bool(args.get("tomorrow"))
+
+    # 先查一下当地天气，筛选晴雨/温度（复用 get_weather 的缓存）
+    try:
+        w = await weather_client.get_weather(city, lat=lat, lon=lon)
+        code, tmax = w["today"]["code"], w["today"]["max"]
+    except Exception:
+        code, tmax = 1, 25  # 查不到天气按舒适晴天处理，不阻断推荐
+
+    # ①+② 自定义地点 → 静态库
+    result = poi_client.recommend(
+        city, district, code, tmax, now.month, now.weekday(), now.hour,
+        is_tomorrow=is_tomorrow,
+        # 库里没这个城市时进入「乡下模式」：只用自定义地点，不硬凑
+        custom_only=city.rstrip("市") not in poi_client._LIBRARY and not district,
+    )
+    if result:
+        return result
+
+    # ③ Exa 动态搜当地特色（静态库没有的城市）
+    dynamic = await search_client.search_local_spots(city, now.month)
+    if dynamic:
+        return f"搜到的{city}热门去处参考：{dynamic[:200]}"
+
+    # 全无 → 明确告知走生活建议
+    return f"{city}没有找到合适的景点信息，结合天气给些生活活动建议就好，不要提具体地点"
 
 
 # 按句切分：中文标点后断句，问号/叹号/省略号都算句尾；

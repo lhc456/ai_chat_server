@@ -131,11 +131,25 @@ async def get_weather(city: str, lat: float = None, lon: float = None) -> dict:
         "current": "temperature_2m,apparent_temperature,weather_code,wind_speed_10m,relative_humidity_2m",
         "daily": "weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max",
         "timezone": "auto",
-        "forecast_days": 2,
+        "past_days": 2,      # 前天/昨天也能答
+        "forecast_days": 7,  # 今天+未来6天，覆盖后天/周末
     }
     d = await _fetch("https://api.open-meteo.com/v1/forecast", params)
 
     cur, daily = d["current"], d["daily"]
+
+    # 逐日结构：days[0]=前天 … days[2]=今天 … days[8]=未来第6天
+    days = []
+    for i, date_str in enumerate(daily["time"]):
+        days.append({
+            "date": date_str,
+            "code": int(daily["weather_code"][i]),
+            "desc": _desc(daily["weather_code"][i]),
+            "max": daily["temperature_2m_max"][i],
+            "min": daily["temperature_2m_min"][i],
+            "precip_prob": daily["precipitation_probability_max"][i],
+        })
+
     data = {
         "city": city,
         "current": {
@@ -145,29 +159,59 @@ async def get_weather(city: str, lat: float = None, lon: float = None) -> dict:
             "wind": cur["wind_speed_10m"],
             "humidity": cur["relative_humidity_2m"],
         },
-        "today": {
-            "desc": _desc(daily["weather_code"][0]),
-            "code": int(daily["weather_code"][0]),
-            "max": daily["temperature_2m_max"][0],
-            "min": daily["temperature_2m_min"][0],
-            "precip_prob": daily["precipitation_probability_max"][0],
-        },
-        "tomorrow": {
-            "desc": _desc(daily["weather_code"][1]),
-            "max": daily["temperature_2m_max"][1],
-            "min": daily["temperature_2m_min"][1],
-            "precip_prob": daily["precipitation_probability_max"][1],
-        },
+        # days[2]=今天（past_days=2 时第3个元素）；异常时取第1个兑底
+        "days": days,
+        "today": {k: days[2][k] for k in ("desc", "code", "max", "min", "precip_prob")} if len(days) > 2 else {k: days[0][k] for k in ("desc", "code", "max", "min", "precip_prob")},
+        "tomorrow": {k: days[3][k] for k in ("desc", "max", "min", "precip_prob")} if len(days) > 3 else {k: days[-1][k] for k in ("desc", "max", "min", "precip_prob")},
     }
     _weather_cache[cache_key] = (now + _WEATHER_TTL, data)
     return data
 
 
-def format_weather(w: dict) -> str:
-    """把天气数据压成一段中文，喂给 LLM 当工具结果（含环境线索，供模型灵活生成建议）"""
+def format_weather(w: dict, day: str = "today") -> str:
+    """
+    把天气数据压成一段中文，喂给 LLM 当工具结果（含环境线索，供模型灵活生成建议）
+
+    Args:
+        day: "today" 报今天（含当前温度）；"tomorrow" 只报明天（不报现在温度，
+             活动建议按明天的情况给）——用户问哪天就报哪天
+    """
     import datetime
 
     c, t, m = w["current"], w["today"], w["tomorrow"]
+
+    if day != "today":
+        # 相对日期解析：day 参数现在是日期偏移（"-1"=昨天，"0"=今天，"1"=明天，"2"=后天…）
+        try:
+            offset = int(day)
+        except (TypeError, ValueError):
+            offset = 0
+        # 今天在 days 中的下标 = past_days(2)，越界则夹到有效范围
+        idx = max(0, min(len(w["days"]) - 1, offset + 2))
+        target = w["days"][idx]
+        target_date = datetime.date.today() + datetime.timedelta(days=offset)
+        wd = target_date.weekday()
+        day_type = "周末" if wd >= 5 else "工作日"
+        wd_cn = "一二三四五六日"[wd]
+
+        if offset < 0:
+            rel = "昨天" if offset == -1 else f"{abs(offset)}天前"
+            past_note = "（历史数据，已过去，不要给未来式建议）"
+        elif offset == 0:
+            rel, past_note = "今天", ""
+        elif offset == 1:
+            rel, past_note = "明天", ""
+        else:
+            rel, past_note = f"{offset}天后", ""
+
+        temp_span = round(target["max"] - target["min"], 1)
+        comfort = "温度舒适" if 18 <= target["max"] <= 28 else ("偏热" if target["max"] > 32 else "偏凉")
+        return (
+            f"{rel}（{target_date.month}月{target_date.day}日 星期{wd_cn}，{day_type}）"
+            f"{w['city']}{target['desc']}，气温{target['min']}~{target['max']}°C（{comfort}，温差{temp_span}度），"
+            f"降水概率{target['precip_prob']}%{past_note}。"
+            + ("请围绕这天的情况给建议，不要提现在的温度" if offset != 0 else "")
+        )
 
     now = datetime.datetime.now()
     weekday = now.weekday()  # 0=周一 … 6=周日

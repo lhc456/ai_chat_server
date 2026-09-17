@@ -17,6 +17,7 @@ class Settings(BaseSettings):
     asr_model_size: str = "base"          # faster-whisper 模型: tiny/base/small/medium/large-v3
     asr_device: str = "auto"              # auto / cpu / cuda
     asr_compute_type: str = "int8"        # int8 适合CPU，float16 适合GPU
+    asr_hotwords: str = "周杰伦 青花瓷 七里香 晴天 稻香 杭州西湖 灵隐寺 金沙湖 西溪湿地 阿里云 通义千问"  # 热词偏置：人名/歌名/地名等专有名词，识别时优先匹配，避免同音字错（如周杰伦→周年轮）
     tts_voice: str = "zh-CN-XiaoxiaoNeural"   # edge-tts 发音人：晓晓（自然耐听，实测用户反馈好于晓伊）；备选 YunxiNeural/YunxiaNeural
     tts_rate: str = "+0%"                 # 语速：+0% 最自然；调太快容易显得赶
     tts_pitch: str = "+0Hz"               # 音调：+0Hz 默认；晓伊等音色调高会显得假
