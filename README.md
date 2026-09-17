@@ -38,6 +38,7 @@ ai-server/
 │   │   └── ollama_client.py       # AI 对话：调用本地 Ollama 服务（qwen3:8b）
 │   │
 │   ├── models/schemas.py          # Pydantic 响应模型（语音接口的数据结构定义）
+│   ├── static/voice_test.html     # 语音功能测试页面（浏览器访问 /test 打开）
 │   └── core/config.py             # 配置管理：.env 读取、语音/大模型等所有配置项
 │
 ├── requirements.txt               # Python 依赖清单
@@ -106,6 +107,17 @@ curl http://localhost:8000/
 ```
 
 ## 📖 使用方法
+
+### 网页测试页面（推荐）
+
+启动后用浏览器打开，可视化测试文字转语音和语音转文字：
+
+**http://localhost:8000/test**
+
+- 🔄 文字转语音：输入文字 → 点击按钮 → 浏览器直接播放合成的语音
+- 🎤 语音转文字：点击按钮录音（浏览器授权麦克风）→ 显示识别结果，也支持上传本地音频文件
+
+页面由服务同源托管，无需额外配置。
 
 ### 在线 API 文档
 

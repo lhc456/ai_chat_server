@@ -1,4 +1,8 @@
+from pathlib import Path
+
 from fastapi import FastAPI
+from fastapi.responses import HTMLResponse
+
 from app.api.voice import router as voice_router
 
 app = FastAPI(
@@ -21,3 +25,10 @@ async def preload_asr_model():
 @app.get("/", summary="服务健康检查")
 async def root():
     return {"status": "ok", "message": "AI语音对话助手后端已启动"}
+
+
+@app.get("/test", summary="语音功能测试页面", include_in_schema=False)
+async def voice_test_page():
+    """浏览器打开即可测试 TTS / ASR，页面由本服务同源托管"""
+    html_path = Path(__file__).parent / "static" / "voice_test.html"
+    return HTMLResponse(content=html_path.read_text(encoding="utf-8"))
