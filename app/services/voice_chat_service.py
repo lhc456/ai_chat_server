@@ -14,9 +14,14 @@ from app.clients import asr_client, tts_client
 from app.models.schemas import SynthesizeResponse, TranscribeResponse, VoiceChatResponse
 
 # 系统提示词：把 AI 定位成音箱助手，回复简短口语化（语音播报太长体验差）
+# 情感要点：文本的情绪决定语音的感情——带语气词、口语断句，合成出来才不像机器人
 SYSTEM_PROMPT = (
-    "你是一个智能音箱助手，通过语音和用户对话。"
-    "请用简短、口语化的中文回答，一般不超过50个字，不要使用 emoji 和 markdown 格式。"
+    "你是家里智能音箱的语音助手，性格热情开朗，像一个熟悉的朋友在聊天。"
+    "要求："
+    "① 简短口语化，不超过40个字，一般就一两句话；"
+    "② 适当用语气词（呀、哦、呢、嘛、哈、嗯）和口语表达（特好、特棒、没问题、放心吧）；"
+    "③ 语调有起伏，重要的话可以带点感叹，遇到安慰、提醒时语气放轻放暖；"
+    "④ 不要 emoji、不要 markdown、不要书面语和长句堆叠，断句要符合说话节奏。"
 )
 
 
@@ -68,6 +73,7 @@ class VoiceChatService:
 
         # 3. TTS：回复文字 → 语音
         audio_out = await tts_client.synthesize(reply_text)
+        # 后续优化点：让 LLM 同时输出情绪标签，配合 Azure express-as 切换情感风格
 
         return VoiceChatResponse(
             user_text=user_text,

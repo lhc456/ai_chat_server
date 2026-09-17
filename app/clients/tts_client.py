@@ -2,7 +2,8 @@
 TTS 语音合成客户端（基于 edge-tts，微软 Edge 浏览器的在线 TTS 服务，免费无需 Key）
 
 优点：中文自然度高、免费
-限制：需要联网；个别网络环境下可能不稳定，后续可换成本地 TTS（如 piper）
+韵律调节：rate（语速）+ pitch（音调）联合微调，减少“新闻播报”式的机械感；
+限制：需要联网；个别网络环境下可能不稳定，后续可换成本地 TTS（如 CosyVoice2/piper）
 """
 import uuid
 from pathlib import Path
@@ -32,7 +33,9 @@ async def synthesize(text: str, voice: str = None) -> bytes:
         raise ValueError("合成内容不能为空")
 
     voice = voice or settings.tts_voice
-    communicate = edge_tts.Communicate(text, voice, rate=settings.tts_rate)
+    communicate = edge_tts.Communicate(
+        text, voice, rate=settings.tts_rate, pitch=settings.tts_pitch
+    )
 
     audio_path = AUDIO_OUT_DIR / f"tts_{uuid.uuid4().hex}.mp3"
     try:
@@ -60,7 +63,9 @@ async def stream_synthesize(text: str, voice: str = None) -> AsyncGenerator[byte
         raise ValueError("合成内容不能为空")
 
     voice = voice or settings.tts_voice
-    communicate = edge_tts.Communicate(text, voice, rate=settings.tts_rate)
+    communicate = edge_tts.Communicate(
+        text, voice, rate=settings.tts_rate, pitch=settings.tts_pitch
+    )
 
     async for chunk in communicate.stream():
         if chunk["type"] == "audio":

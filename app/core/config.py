@@ -12,8 +12,9 @@ class Settings(BaseSettings):
     asr_model_size: str = "base"          # faster-whisper 模型: tiny/base/small/medium/large-v3
     asr_device: str = "auto"              # auto / cpu / cuda
     asr_compute_type: str = "int8"        # int8 适合CPU，float16 适合GPU
-    tts_voice: str = "zh-CN-XiaoxiaoNeural"   # edge-tts 中文语音（晓晓）
-    tts_rate: str = "+0%"                 # 语速，如 "+10%"
+    tts_voice: str = "zh-CN-XiaoyiNeural"     # edge-tts 发音人：晓伊（活泼自然，比晓晓少播音腔）；备选 YunxiNeural/YunxiaNeural
+    tts_rate: str = "+10%"                # 语速：微快一点更接近日常对话，+0% 偏新闻播报感
+    tts_pitch: str = "+5Hz"               # 音调：微调让声音更轻快；也可用 "+0Hz" 恢复默认
 
     class Config:
         env_file = ".env"
