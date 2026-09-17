@@ -191,9 +191,9 @@ bash test_voice.sh   # TTS 合成并播放 → ASR 回环识别 → AI 开关检
 | `ASR_MODEL_SIZE` | `base` | faster-whisper 模型：tiny / base / small / medium / large-v3，越大越准越慢 |
 | `ASR_DEVICE` | `auto` | auto / cpu / cuda |
 | `ASR_COMPUTE_TYPE` | `int8` | int8 适合 CPU，float16 适合 GPU |
-| `TTS_VOICE` | `zh-CN-XiaoyiNeural` | edge-tts 发音人（晓伊，活泼自然），TTS 需要联网；备选 YunxiNeural / YunxiaNeural / XiaoxiaoNeural |
-| `TTS_RATE` | `+10%` | 语速，微快更像日常对话 |
-| `TTS_PITCH` | `+5Hz` | 音调微调，轻快一些；`+0Hz` 恢复默认 |
+| `TTS_VOICE` | `zh-CN-XiaoxiaoNeural` | edge-tts 发音人（晓晓，自然耐听），TTS 需要联网；备选 YunxiNeural / YunxiaNeural / XiaoyiNeural |
+| `TTS_RATE` | `+0%` | 语速，+0% 最自然 |
+| `TTS_PITCH` | `+0Hz` | 音调，默认即最自然；晓伊等音色调高易显假 |
 | `OLLAMA_BASE_URL` | `http://localhost:11434` | Ollama 服务地址 |
 | `OLLAMA_MODEL` | `qwen3:8b` | 使用的本地大模型 |
 
