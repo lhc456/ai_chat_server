@@ -1,31 +1,11 @@
 from fastapi import FastAPI
-from app.api.auth import router as auth_router
-from app.api.chat import router as chat_router
-from app.api.weather import router as weather_router
-from app.api.checklist import router as checklist_router
-from app.api.workday import router as workday_router
-from app.api.documents import router as documents_router
-from app.api.news import router as news_router
 from app.api.voice import router as voice_router
 
 app = FastAPI(
-    title="AI对话小助手后端",
-    description="Python FastAPI 后端服务，提供天气查询、出门清单、工作日判断等接口。",
+    title="AI语音对话助手后端",
+    description="Python FastAPI 后端服务，提供语音识别（ASR）、语音合成（TTS）与 AI 语音对话能力，面向本地/局域网单用户场景。",
     version="0.1.0",
 )
-
-# 认证相关路由（无需登录即可访问）
-app.include_router(auth_router, prefix="/api", tags=["authentication"])
-
-# 业务功能路由（后续可以添加认证保护）
-app.include_router(chat_router, prefix="/api/chat", tags=["chat"])
-app.include_router(weather_router, prefix="/api/weather", tags=["weather"])
-app.include_router(
-    checklist_router, prefix="/api/checklist", tags=["checklist"])
-app.include_router(workday_router, prefix="/api/workday", tags=["workday"])
-app.include_router(
-    documents_router, prefix="/api/documents", tags=["documents"])
-app.include_router(news_router, prefix="/api/news", tags=["news"])
 
 # 语音对话（音箱式交互）
 app.include_router(voice_router, prefix="/api/voice", tags=["voice"])
@@ -40,4 +20,4 @@ async def preload_asr_model():
 
 @app.get("/", summary="服务健康检查")
 async def root():
-    return {"status": "ok", "message": "AI对话小助手后端已启动"}
+    return {"status": "ok", "message": "AI语音对话助手后端已启动"}
